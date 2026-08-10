@@ -22,7 +22,7 @@
 - Valid email address for receiving reports
 
 ## Quick Start
-1. Navigate to Actions in the Matcha repository
+1. Navigate to Actions in the repository
 2. Select "Security Scan" workflow
 3. Click "Run workflow"
 4. Fill in required parameters:
