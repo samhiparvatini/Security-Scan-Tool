@@ -1,8 +1,5 @@
 # GitHub-Security-Scan-Tool
 
-## Overview
-A GitHub Actions workflow for automated security scanning of FCPS repositories. This workflow performs comprehensive security analysis using CodeQL, npm audit, and Trivy to identify vulnerabilities, misconfigurations, and potential security issues.
-
 ## Version Information
 - Version: 4.0.0
 - Version: 2.0.0
