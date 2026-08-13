@@ -18,7 +18,7 @@ on:
         required: true
         default: 'nodeles'
         type: choice
-        options: ["apex-application-audit", "apex-bhms", "apex-course-catalog", "apex-cte", "apex-elph", "apex-esol-src", "apex-fsdirect", "apex-gbmentor", "apex-great-beginnings", "apex-impact-aid", "apex-itts", "apex-mtss-foresight", "apex-mtss-insight", "apex-oncourse-direct", "apex-parent-consent", "apex-resaddr", "apex-school-profile", "apex-shared-code", "apex-slams", "apex-starter-project", "aws-service-request-integration", "azure-crowdstrike-eventhub", "Circle", "ContactsAdmin", "ContactsSearch", "Course-Catalog-Document", "CourseCatalogOnline", "CurriculumRepository", "DEL-Admin", "DEL-BE", "DEL-Search", "EC-FFX-Recorder", "ECOrders", "JASe", "JASe-Admin-BE", "JASe-Admin-FE", "JASe-BE", "JASe-FE", "knowledge_management", "MagnetLotteryAdmin_BE", "MagnetLotteryAdmin_FE", "MagnetLottery_BE", "MagnetLottery_FE", "Magnet_CF", "Matcha", "Nodeles", "Principal-Recommendation", "Public-POS", "RightAngle17", "RightAngle18", "RightAngle2x", "RPA_CloudStrike_ArchiveCleanup", "RubiBE", "RubiFE", "SAML-Auth", "SCDAdmin", "SCDRegistration", "SCD_CF", "SchoolBoardApps", "ScienceFairAdmin", "ScienceFairRegistration", "SciencePortalOrdering", "security-architecture-tech-bulletin", "Smart-Search", "STAdminCF", "STParentCF", "StudentTransferAdmin", "StudentTransferAdminBE", "StudentTransferParent", "StudentTransferParentNode", "terraform-aws-api-gateway-core", "test-cloud-cohort", "WLImmersionAdmin_BE", "WLImmersionAdmin_FE", "WLImmersion_BE", "WLImmersion_CF", "WLImmersion_FE"]
+        options: ["node-ts", "apex-bhms", "dogbreed-database", "coursescheduler"]
       project-type:
         description: 'Project Type'
         required: true
