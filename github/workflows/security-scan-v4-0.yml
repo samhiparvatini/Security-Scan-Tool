@@ -48,17 +48,9 @@ on:
         required: true
         type: choice
         options:
-          - catanzer@fcps.edu
-          - cholet@fcps.edu
-          - civonbostel@fcps.edu
-          - dli@fcps.edu
-          - mrmckenna@fcps.edu
-          - phuynh@fcps.edu
-          - rrajan1@fcps.edu
-          - scgiese1@fcps.edu
-          - SRBrun@fcps.edu
-          - tanguyen1@fcps.edu
-          - vrparvatini1@fcps.edu
+          - slparvatin@fcps.edu
+          - jdoe@fcps.edu
+          - jappleseed@fcps.edu
 env:
   NODE_VERSION: '22'
   # Trivy version managed by aquasecurity/trivy-action
