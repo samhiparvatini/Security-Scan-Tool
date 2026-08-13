@@ -3,7 +3,6 @@
 # Optimized scanning based on project type:
 # - Full-Stack: npm audit, Trivy, CodeQL (only if JS/TS files exist)
 # - Apex: npm audit, Trivy, CodeQL (for JS/CSS), ZPA (for PL/SQL), PL/SQL patterns
-# Created: December 2025 by Tuan Nguyen
 
 name: Security Scan - version 4.0
 permissions:
