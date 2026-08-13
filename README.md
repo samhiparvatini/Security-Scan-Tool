@@ -1,3 +1,11 @@
+# GitHub-Security-Scan-Tool
+
+## Overview
+A GitHub Actions workflow for automated security scanning of FCPS repositories. This workflow performs comprehensive security analysis using CodeQL, npm audit, and Trivy to identify vulnerabilities, misconfigurations, and potential security issues.
+
+## Author
+- Created by: Tuan A Nguyen (tanguyen1@fcps.edu)
+
 ## Version Information
 - Version: 4.0.0
 - Version: 2.0.0
@@ -22,7 +30,7 @@
 - Valid email address for receiving reports
 
 ## Quick Start
-1. Navigate to Actions in the repository
+1. Navigate to Actions in the Matcha repository
 2. Select "Security Scan" workflow
 3. Click "Run workflow"
 4. Fill in required parameters:
@@ -30,3 +38,9 @@
    - Frontend/backend directory names
    - Branch to scan
    - Recipient email
+
+## Documentation
+For detailed usage instructions and troubleshooting, please refer to the Confluence documentation.
+
+
+
