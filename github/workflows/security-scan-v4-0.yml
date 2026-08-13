@@ -1,0 +1,672 @@
+# Security Scan - version 4.0
+# Added support for Apex projects (PL/SQL, JavaScript, CSS)
+# Optimized scanning based on project type:
+# - Full-Stack: npm audit, Trivy, CodeQL (only if JS/TS files exist)
+# - Apex: npm audit, Trivy, CodeQL (for JS/CSS), ZPA (for PL/SQL), PL/SQL patterns
+# Created: December 2025 by Tuan Nguyen
+
+name: Security Scan - version 4.0
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+  issues: read
+on:
+  workflow_dispatch:
+    inputs:
+      repo-name:
+        description: 'Repository name to scan'
+        required: true
+        default: 'nodeles'
+        type: choice
+        options: ["apex-application-audit", "apex-bhms", "apex-course-catalog", "apex-cte", "apex-elph", "apex-esol-src", "apex-fsdirect", "apex-gbmentor", "apex-great-beginnings", "apex-impact-aid", "apex-itts", "apex-mtss-foresight", "apex-mtss-insight", "apex-oncourse-direct", "apex-parent-consent", "apex-resaddr", "apex-school-profile", "apex-shared-code", "apex-slams", "apex-starter-project", "aws-service-request-integration", "azure-crowdstrike-eventhub", "Circle", "ContactsAdmin", "ContactsSearch", "Course-Catalog-Document", "CourseCatalogOnline", "CurriculumRepository", "DEL-Admin", "DEL-BE", "DEL-Search", "EC-FFX-Recorder", "ECOrders", "JASe", "JASe-Admin-BE", "JASe-Admin-FE", "JASe-BE", "JASe-FE", "knowledge_management", "MagnetLotteryAdmin_BE", "MagnetLotteryAdmin_FE", "MagnetLottery_BE", "MagnetLottery_FE", "Magnet_CF", "Matcha", "Nodeles", "Principal-Recommendation", "Public-POS", "RightAngle17", "RightAngle18", "RightAngle2x", "RPA_CloudStrike_ArchiveCleanup", "RubiBE", "RubiFE", "SAML-Auth", "SCDAdmin", "SCDRegistration", "SCD_CF", "SchoolBoardApps", "ScienceFairAdmin", "ScienceFairRegistration", "SciencePortalOrdering", "security-architecture-tech-bulletin", "Smart-Search", "STAdminCF", "STParentCF", "StudentTransferAdmin", "StudentTransferAdminBE", "StudentTransferParent", "StudentTransferParentNode", "terraform-aws-api-gateway-core", "test-cloud-cohort", "WLImmersionAdmin_BE", "WLImmersionAdmin_FE", "WLImmersion_BE", "WLImmersion_CF", "WLImmersion_FE"]
+      project-type:
+        description: 'Project Type'
+        required: true
+        default: 'Full-Stack'
+        type: choice
+        options:
+          - Full-Stack
+          - Apex
+      frontend:
+        description: 'Frontend directory name (e.g., frontend, client)'
+        required: false
+        default: ''
+        type: string
+      backend:
+        description: 'Backend directory name (e.g., backend, server)'
+        required: false
+        default: ''
+        type: string
+      branch:
+        description: 'Branch to scan'
+        required: true
+        default: 'main'
+        type: string
+      recipient_email:
+        description: 'Email address to receive the security report'
+        required: true
+        type: choice
+        options:
+          - catanzer@fcps.edu
+          - cholet@fcps.edu
+          - civonbostel@fcps.edu
+          - dli@fcps.edu
+          - mrmckenna@fcps.edu
+          - phuynh@fcps.edu
+          - rrajan1@fcps.edu
+          - scgiese1@fcps.edu
+          - SRBrun@fcps.edu
+          - tanguyen1@fcps.edu
+          - vrparvatini1@fcps.edu
+env:
+  NODE_VERSION: '22'
+  # Trivy version managed by aquasecurity/trivy-action
+jobs:
+  format_inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      repo_name_title: ${{ steps.format-name.outputs.title_case }}
+      is_apex: ${{ steps.check-type.outputs.is_apex }}
+    steps:
+      - id: format-name
+        run: |
+          # Convert repo name to Title Case while preserving hyphens
+          input="${{ inputs.repo-name }}"
+          title_case=$(echo "$input" | awk 'BEGIN{FS=OFS="-"} {for(i=1;i<=NF;i++)$i=toupper(substr($i,1,1)) substr($i,2)}1')
+          echo "title_case=$title_case" >> "$GITHUB_OUTPUT"
+      - id: check-type
+        run: |
+          if [ "${{ inputs.project-type }}" == "Apex" ]; then
+            echo "is_apex=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_apex=false" >> "$GITHUB_OUTPUT"
+          fi
+  determine_targets:
+    needs: format_inputs
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          directories=()
+
+          # Process frontend directory if provided
+          if [ ! -z "${{ inputs.frontend }}" ]; then
+            frontend_dir=$(echo "${{ inputs.frontend }}" | xargs)
+            if [ ! -z "$frontend_dir" ]; then
+              directories+=("$frontend_dir")
+            fi
+          fi
+
+          # Process backend directory if provided
+          if [ ! -z "${{ inputs.backend }}" ]; then
+            backend_dir=$(echo "${{ inputs.backend }}" | xargs)
+            if [ ! -z "$backend_dir" ]; then
+              directories+=("$backend_dir")
+            fi
+          fi
+
+          # If no directories specified, scan the root directory
+          if [ ${#directories[@]} -eq 0 ]; then
+            directories+=(".")
+          fi
+
+          # Create JSON array from directories
+          json_array=$(printf '%s\n' "${directories[@]}" | jq -R . | jq -sc .)
+          matrix_json="{\"directory\":$json_array}"
+
+          {
+            echo "matrix<<EOF"
+            echo "$matrix_json"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # Debug output
+          echo "Project type: ${{ inputs.project-type }}"
+          echo "Directories to scan: ${directories[*]}"
+          echo "Generated matrix: $matrix_json"
+  security_scans:
+    needs: [format_inputs, determine_targets]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{fromJson(needs.determine_targets.outputs.matrix)}}
+      fail-fast: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.OWNER }}/${{ inputs.repo-name }}
+          token: ${{ secrets.AUTHOR }}
+          ref: ${{ inputs.branch }}
+          path: target-repo
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # Note: ZPA CLI 3.x comes with bundled Java runtime, no separate Java setup needed
+      - name: Create Reports Directory
+        run: mkdir -p security-reports/codeql-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}
+      # Check if JavaScript/TypeScript files exist before initializing CodeQL
+      - name: Check for JavaScript/TypeScript files
+        # ===== CODEQL SCANNING (Both Full-Stack and Apex for JavaScript) =====
+
+        id: check-js-files
+        run: |
+          SCAN_DIR="${{ matrix.directory == '.' && 'target-repo' || format('target-repo/{0}', matrix.directory) }}"
+
+          echo "Checking for JS/TS files in: $SCAN_DIR"
+
+          # Find JS/TS files excluding node_modules, dist, build directories
+          TOTAL_FILES=$(find "$SCAN_DIR" -type f \
+            \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) \
+            ! -path "*/node_modules/*" \
+            ! -path "*/dist/*" \
+            ! -path "*/build/*" \
+            ! -name "*.min.js" \
+            ! -name "*.bundle.js" \
+            2>/dev/null | wc -l)
+
+          echo "Found $TOTAL_FILES JavaScript/TypeScript files (before content check)"
+
+          # Count files with actual content (more than 10 bytes and contains code)
+          VALID_FILES=0
+          while IFS= read -r file; do
+            if [ -f "$file" ] && [ -s "$file" ]; then
+              # Check if file has more than 10 bytes (not just empty or whitespace)
+              FILE_SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
+              if [ "$FILE_SIZE" -gt 10 ]; then
+                # Skip placeholder files (files with only comments or placeholder text)
+                if grep -qE '(placeholder|TODO|FIXME|gitkeep)' "$file" 2>/dev/null; then
+                  # Check if it's ONLY a placeholder (no actual code)
+                  if ! grep -qE '(function|const|let|var|class|import|export|if|for|while|=>|return)' "$file" 2>/dev/null; then
+                    echo "Skipping placeholder file: $file"
+                    continue
+                  fi
+                fi
+
+                # Check if file contains actual code (not just comments/whitespace)
+                if grep -qE '(function|const|let|var|class|import|export|if|for|while|=>|return)' "$file" 2>/dev/null; then
+                  # Additional check: file should have valid JS/TS syntax markers
+                  # Skip if file looks like SQL, shell script, or other non-JS content
+                  if grep -qE '^(--|#!|SELECT|INSERT|UPDATE|DELETE|CREATE TABLE)' "$file" 2>/dev/null; then
+                    echo "Skipping non-JavaScript file: $file"
+                    continue
+                  fi
+                  VALID_FILES=$((VALID_FILES + 1))
+                fi
+              fi
+            fi
+          done < <(find "$SCAN_DIR" -type f \
+            \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) \
+            ! -path "*/node_modules/*" \
+            ! -path "*/dist/*" \
+            ! -path "*/build/*" \
+            ! -name "*.min.js" \
+            ! -name "*.bundle.js" \
+            2>/dev/null)
+
+          echo "Found $VALID_FILES valid JavaScript/TypeScript files with actual code"
+
+          # Debug: Show some sample valid files
+          if [ "$VALID_FILES" -gt 0 ]; then
+            echo "Sample files that will be scanned:"
+            find "$SCAN_DIR" -type f \
+              \( -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) \
+              ! -path "*/node_modules/*" \
+              ! -path "*/dist/*" \
+              ! -path "*/build/*" \
+              ! -name "*.min.js" \
+              ! -name "*.bundle.js" \
+              2>/dev/null | head -5
+          fi
+
+          if [ "$VALID_FILES" -gt 0 ]; then
+            echo "has_js_files=true" >> "$GITHUB_OUTPUT"
+            echo "JavaScript/TypeScript files found - CodeQL will run"
+          else
+            echo "has_js_files=false" >> "$GITHUB_OUTPUT"
+            echo "No valid JavaScript/TypeScript files found - CodeQL will be skipped"
+            echo "Note: Empty files or files with only comments are excluded"
+          fi
+      # Initialize CodeQL for JavaScript analysis
+      # For Full-Stack: Scan all JS/TS files
+      # For Apex: Scan JavaScript and CSS files used in Apex pages
+      - name: Initialize CodeQL
+        if: steps.check-js-files.outputs.has_js_files == 'true'
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          source-root: ${{ matrix.directory == '.' && 'target-repo' || format('target-repo/{0}', matrix.directory) }}
+          queries: security-and-quality
+          config: |
+            paths-ignore:
+              - '**/node_modules'
+              - '**/dist'
+              - '**/build'
+              - '**/out'
+              - '**/*.min.js'
+              - '**/*.bundle.js'
+      # Run CodeQL analysis
+      - name: Perform CodeQL Analysis
+        if: steps.check-js-files.outputs.has_js_files == 'true'
+        id: codeql-analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /${{ matrix.directory }}
+          output: sarif-results
+          upload: false
+      # Save CodeQL SARIF results
+      - name: Save CodeQL Results
+        if: steps.check-js-files.outputs.has_js_files == 'true'
+        run: |
+          if [ -d "sarif-results" ]; then
+            echo "CodeQL results directory exists, copying files..."
+            mkdir -p security-reports/codeql-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}
+            cp -r sarif-results/* security-reports/codeql-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}/
+            echo "Files in destination directory:"
+            ls -la security-reports/codeql-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}/
+          else
+            echo "No CodeQL results found in sarif-results directory"
+            mkdir -p security-reports/codeql-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}
+            echo "Creating empty directory for consistency"
+          fi
+      # Run npm audit (Both Full-Stack and Apex)
+      - name: Run npm audit
+        if: ${{ matrix.directory == '.' || hashFiles(format('target-repo/{0}/package.json', matrix.directory)) != '' }}
+        working-directory: ${{ matrix.directory == '.' && 'target-repo' || format('target-repo/{0}', matrix.directory) }}
+        continue-on-error: true
+        run: |
+          mkdir -p ${{ github.workspace }}/security-reports
+
+          echo "Running npm audit for ${{ matrix.directory }}"
+
+          npm install --package-lock-only --ignore-scripts --legacy-peer-deps
+
+          if npm audit --json > ${{ github.workspace }}/security-reports/npm-audit-${{ matrix.directory == '.' && 'root' || matrix.directory }}.json; then
+            echo "Audit completed successfully"
+          else
+            echo "Audit completed with vulnerabilities"
+          fi
+      # Generate package-lock.json for Trivy to scan (Both Full-Stack and Apex)
+      - name: Prepare for Trivy scan
+        run: |
+          SCAN_DIR="${{ matrix.directory == '.' && 'target-repo' || format('target-repo/{0}', matrix.directory) }}"
+
+          if [ -d "$SCAN_DIR" ] && [ -f "$SCAN_DIR/package.json" ]; then
+            echo "Running npm install in $SCAN_DIR"
+            cd "$SCAN_DIR"
+            npm install --package-lock-only --ignore-scripts --legacy-peer-deps
+          else
+            echo "No package.json found in $SCAN_DIR or directory does not exist"
+          fi
+      # Run Trivy scan using official GitHub Action (Both Full-Stack and Apex)
+      - name: Run Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: ${{ matrix.directory == '.' && 'target-repo' || format('target-repo/{0}', matrix.directory) }}
+          format: 'json'
+          output: security-reports/trivy-${{ matrix.directory == '.' && 'root' || matrix.directory }}.json
+          scanners: 'vuln,config,secret'
+          skip-dirs: 'node_modules,.git'
+      # ===== APEX SCANNING (PL/SQL + JavaScript + CSS) =====
+      # Cache ZPA CLI (Apex only)
+      - name: Cache ZPA CLI
+        if: ${{ needs.format_inputs.outputs.is_apex == 'true' }}
+        uses: actions/cache@v4
+        id: cache-zpa
+        with:
+          path: |
+            /usr/local/zpa-cli
+            /usr/local/bin/zpa
+          key: zpa-cli-latest-${{ runner.os }}
+          restore-keys: |
+            zpa-cli-latest-
+      # Install ZPA CLI for PL/SQL analysis (Apex only)
+      - name: Install ZPA CLI
+        if: ${{ needs.format_inputs.outputs.is_apex == 'true' && steps.cache-zpa.outputs.cache-hit != 'true' }}
+        run: |
+          echo "Fetching latest ZPA CLI release from GitHub..."
+
+          # Fetch latest release metadata with authentication
+          release=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/felipebz/zpa-cli/releases/latest)
+
+          # Debug: Show raw response
+          echo "API Response:"
+          echo "$release" | jq -r '.tag_name // "null", .message // "no error"'
+
+          # Extract version number
+          latest_version=$(echo "$release" | jq -r '.tag_name // empty')
+
+          if [ -z "$latest_version" ]; then
+            echo "ERROR: Could not fetch latest version from GitHub API"
+            echo "Response: $release"
+            exit 1
+          fi
+
+          echo "Latest ZPA CLI version detected: $latest_version"
+
+          echo "Searching for Linux asset..."
+
+          # Prefer GNU Linux asset, fallback to MUSL
+          download_url=$(echo "$release" | jq -r '
+            .assets[]
+            | select(
+                (.name | test("linux"; "i")) and
+                (.name | test("x86_64"; "i")) and
+                (.name | test("musl"; "i") | not)
+            )
+            | .browser_download_url
+          ' | head -n 1)
+
+          # If no GNU version, try MUSL
+          if [ -z "$download_url" ]; then
+            echo "No GNU Linux version found, trying MUSL..."
+            download_url=$(echo "$release" | jq -r '
+              .assets[]
+              | select(
+                  (.name | test("linux"; "i")) and
+                  (.name | test("musl"; "i")) and
+                  (.name | test("x86_64"; "i"))
+              )
+              | .browser_download_url
+            ' | head -n 1)
+          fi
+
+          if [ -z "$download_url" ]; then
+            echo "ERROR: No Linux asset found in release $latest_version"
+            echo "Available assets:"
+            echo "$release" | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          echo "Download URL: $download_url"
+
+          # Download archive
+          curl -L "$download_url" -o zpa-cli.tar.gz --fail
+
+          echo "Extracting ZPA CLI..."
+          mkdir -p zpa-cli
+          tar -xzf zpa-cli.tar.gz -C zpa-cli
+
+          # DEBUG: List all extracted files
+          echo "=== Extracted files structure ==="
+          find zpa-cli -type f -ls
+          echo "================================="
+
+          echo "Locating ZPA installation directory..."
+
+          # Find the extracted ZPA directory (e.g., zpa-cli-3.0.1-linux-x86_64)
+          ZPA_DIR=$(find zpa-cli -maxdepth 1 -mindepth 1 -type d | head -1)
+
+          if [ -z "$ZPA_DIR" ]; then
+            echo "ERROR: No ZPA directory found after extraction"
+            exit 1
+          fi
+
+          echo "ZPA directory found: $ZPA_DIR"
+
+          # Verify bin directory exists
+          if [ ! -d "$ZPA_DIR/bin" ]; then
+            echo "ERROR: No bin directory found in $ZPA_DIR"
+            exit 1
+          fi
+
+          # Make wrapper executable
+          chmod +x "$ZPA_DIR/bin/zpa-cli"
+
+          # Move entire ZPA directory to /usr/local/ to preserve bundled Java runtime
+          echo "Installing ZPA CLI to /usr/local/zpa-cli..."
+          sudo mv "$ZPA_DIR" /usr/local/zpa-cli
+
+          # Create symlink to make 'zpa' command available globally
+          sudo ln -sf /usr/local/zpa-cli/bin/zpa-cli /usr/local/bin/zpa
+
+          echo "ZPA CLI installation complete."
+
+          # Verify installation
+          if zpa --version; then
+            echo "ZPA CLI verified successfully"
+          else
+            echo "WARNING: ZPA version check failed, but installation completed"
+          fi
+      # Run ZPA PL/SQL scan (Apex only)
+      - name: Run ZPA PL/SQL scan
+        if: ${{ needs.format_inputs.outputs.is_apex == 'true' }}
+        continue-on-error: true
+        run: |
+          SCAN_DIR="${{ matrix.directory == '.' && 'target-repo' || format('target-repo/{0}', matrix.directory) }}"
+          OUTPUT_FILE="security-reports/zpa-${{ matrix.directory == '.' && 'root' || matrix.directory }}.json"
+
+          echo "========================================"
+          echo "Scanning directory: $SCAN_DIR"
+          echo "Current working directory: $(pwd)"
+          echo "========================================"
+
+          # Verify scan directory exists
+          if [ ! -d "$SCAN_DIR" ]; then
+            echo "Error: Directory $SCAN_DIR does not exist"
+            echo '{
+              "issues": [],
+              "message": "Directory not found"
+            }' > "$OUTPUT_FILE"
+            exit 0
+          fi
+
+          # Check if PL/SQL files exist
+          echo "Searching for PL/SQL files..."
+          PLSQL_FILES=$(find "$SCAN_DIR" -type f \( -name "*.sql" -o -name "*.pls" -o -name "*.pks" -o -name "*.pkb" \) 2>/dev/null)
+
+          if [ -n "$PLSQL_FILES" ]; then
+            echo "PL/SQL files found:"
+            echo "$PLSQL_FILES" | head -10
+            echo ""
+            echo "Running ZPA scan..."
+
+            # Try global install first, fallback to local
+            if command -v zpa >/dev/null 2>&1; then
+              ZPA_CMD="zpa"
+            elif [ -x "./zpa-cli" ]; then
+              ZPA_CMD="./zpa-cli"
+            else
+              echo "ERROR: ZPA CLI not found"
+              exit 1
+            fi
+
+            echo "Using ZPA command: $ZPA_CMD"
+
+            # Run ZPA CLI binary
+            if $ZPA_CMD \
+              --sources "$SCAN_DIR" \
+              --output-format sq-generic-issue-import \
+              --output-file "$OUTPUT_FILE"; then
+              echo "ZPA scan completed successfully"
+            else
+              EXIT_CODE=$?
+              echo "ZPA scan completed with exit code: $EXIT_CODE"
+              # ZPA returns non-zero if issues are found, which is expected
+              if [ ! -f "$OUTPUT_FILE" ]; then
+                echo "Creating empty results file"
+                echo '{
+                  "issues": [],
+                  "message": "Scan completed but no output file generated"
+                }' > "$OUTPUT_FILE"
+              fi
+            fi
+          else
+            echo "No PL/SQL files found in $SCAN_DIR"
+            echo '{
+              "issues": [],
+              "message": "No PL/SQL files found in directory"
+            }' > "$OUTPUT_FILE"
+          fi
+
+          echo "========================================"
+          echo "ZPA scan step completed"
+          echo "========================================"
+      # Run PL/SQL pattern detection for additional security issues (Apex only)
+      - name: PL/SQL Pattern Detection
+        if: ${{ needs.format_inputs.outputs.is_apex == 'true' }}
+        continue-on-error: true
+        run: |
+          SCAN_DIR="${{ matrix.directory == '.' && 'target-repo' || format('target-repo/{0}', matrix.directory) }}"
+          OUTPUT_FILE="security-reports/plsql-patterns-${{ matrix.directory == '.' && 'root' || matrix.directory }}.json"
+
+          echo "Running pattern detection for PL/SQL security issues"
+
+          # Initialize JSON array
+          patterns='[]'
+
+          # Check for weak crypto (DBMS_OBFUSCATION_TOOLKIT)
+          if grep -r "DBMS_OBFUSCATION_TOOLKIT" "$SCAN_DIR" --include="*.sql" --include="*.pls" --include="*.pks" --include="*.pkb" -n 2>/dev/null; then
+            echo "Found DBMS_OBFUSCATION_TOOLKIT usage (deprecated/weak crypto)"
+            patterns=$(echo "$patterns" | jq '. += [{"type": "weak-crypto", "pattern": "DBMS_OBFUSCATION_TOOLKIT", "severity": "high", "description": "Use of deprecated DBMS_OBFUSCATION_TOOLKIT package"}]')
+          fi
+
+          # Check for hardcoded passwords
+          if grep -rE "password\s*:=\s*['\"]" "$SCAN_DIR" --include="*.sql" --include="*.pls" --include="*.pks" --include="*.pkb" -n 2>/dev/null; then
+            echo "Found potential hardcoded passwords"
+            patterns=$(echo "$patterns" | jq '. += [{"type": "hardcoded-credential", "pattern": "password := string", "severity": "critical", "description": "Potential hardcoded password found"}]')
+          fi
+
+          # Check for AUTHID DEFINER (privilege escalation risk)
+          if grep -r "AUTHID DEFINER" "$SCAN_DIR" --include="*.sql" --include="*.pls" --include="*.pks" --include="*.pkb" -n 2>/dev/null; then
+            echo "Found AUTHID DEFINER usage"
+            patterns=$(echo "$patterns" | jq '. += [{"type": "privilege-escalation", "pattern": "AUTHID DEFINER", "severity": "medium", "description": "AUTHID DEFINER may cause privilege escalation"}]')
+          fi
+
+          # Save patterns to JSON file
+          echo "{\"patterns\": $patterns}" > "$OUTPUT_FILE"
+
+          echo "Pattern detection completed"
+          cat "$OUTPUT_FILE"
+      # List all report files for debugging
+      - name: List report files
+        run: |
+          echo "Contents of security-reports directory:"
+          find security-reports -type f | sort
+          echo "---"
+
+          # Check if CodeQL results exist
+          if [ -d "security-reports/codeql-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}" ]; then
+            echo "Files in CodeQL results directory:"
+            ls -la security-reports/codeql-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}/
+          fi
+
+          # Show project type
+          echo "Project type: ${{ inputs.project-type }}"
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-results-${{ matrix.directory == '.' && 'root' || matrix.directory }}
+          path: security-reports/
+          retention-days: 1
+  send_combined_report:
+    needs: [format_inputs, security_scans]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+      - name: Download all scan results
+        uses: actions/download-artifact@v4
+        with:
+          path: all-reports
+          pattern: scan-results-*
+          merge-multiple: true
+      - name: List downloaded files
+        run: |
+          echo "Contents of all-reports directory:"
+          find all-reports -type f | sort
+
+          # Check if CodeQL results exist in downloaded artifacts
+          echo "Looking for CodeQL result files:"
+          find all-reports -path "*/codeql-results-*/*.sarif" | sort
+
+          # Check for Apex-specific results
+          if [ "${{ needs.format_inputs.outputs.is_apex }}" == "true" ]; then
+            echo "Looking for Apex scan results (ZPA, patterns):"
+            find all-reports -name "zpa-*.json" | sort
+            find all-reports -name "plsql-patterns-*.json" | sort
+          fi
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Generate Combined Report
+        run: |
+          # Run the report generator script from the repository
+          # Pass project type as second argument
+          node .github/scripts/generate-report-v4-0.js "${{ inputs.repo-name }}" "${{ inputs.project-type }}"
+      - name: Export to CSV
+        run: |
+          # Export security scan results to CSV format
+          node .github/scripts/export-to-csv.js "${{ inputs.repo-name }}" "${{ inputs.project-type }}"
+      - name: Upload CSV Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: csv-reports-${{ inputs.repo-name }}
+          path: |
+            security-scan-*.csv
+          retention-days: 30
+      - name: Install jsonwebtoken
+        run: npm install jsonwebtoken
+      - name: Send combined email via API
+        run: |
+          node -e "
+          const jwt = require('jsonwebtoken');
+          const fs = require('fs');
+
+          // Read the private key
+          const privateKey = \`${{ secrets.JWT }}\`;
+
+          // Read the HTML report content
+          const htmlContent = fs.readFileSync('combined-report.html', 'utf8');
+
+          // Define JWT payload
+          const payload = {
+            iss: '${{ secrets.ISS }}',
+            aud: '${{ secrets.AUD }}',
+            appName: '${{ secrets.APP }}',
+            exp: Math.floor(Date.now() / 1000) + 60 * 60, // Expires in 1 hour
+            iat: Math.floor(Date.now() / 1000), // Issued at time
+          };
+
+          // Sign JWT with private key
+          const token = jwt.sign(payload, privateKey, { algorithm: '${{ secrets.ALG }}' });
+
+          // Prepare email body with project type in subject
+          const emailBody = JSON.stringify({
+            to: '${{ inputs.recipient_email }}',
+            subject: 'Security Scan Report - ${{ inputs.repo-name }} (${{ inputs.project-type }}) - ${{ inputs.branch }} branch',
+            body: htmlContent,
+            from: 'GitHub Security Scanner'
+          });
+
+          // Send POST request to email service
+          fetch('${{ secrets.EMAILS }}', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': \`Bearer \${token}\`,
+              'x-api-key': '${{ secrets.KEY }}'
+            },
+            body: emailBody
+          })
+          .then(res => {
+            console.log('Response status:', res.status);
+            return res.text();
+          })
+          .then(response => {
+            console.log('Email service response:', response);
+          })
+          .catch(error => {
+            console.error('Error sending email:', error);
+            process.exit(1);
+          });
+          "

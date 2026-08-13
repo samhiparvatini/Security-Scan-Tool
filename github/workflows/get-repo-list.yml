@@ -1,0 +1,149 @@
+name: Update Security Scan Repo Lists
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update-repo-list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.AUTHOR }}
+
+      - name: Install yq
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.43.1/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+
+      - name: List and filter repositories
+        env:
+          GH_TOKEN: ${{ secrets.AUTHOR }}
+        run: |
+          keywords="create|demo"
+
+          exclude_repos="
+          # apex-application-audit
+          # apex-course-catalog
+          # apex-elph
+          # apex-esol-src
+          # apex-gbmentor
+          # apex-great-beginnings
+          # apex-parent-consent
+          # apex-shared-code
+          # azure-crowdstrike-eventhub
+          create-github-repository
+          EmailTemplates
+          Exports
+          GitHub-Security-Scan-Tool
+          MACS_CF
+          MSG_Test
+          ping-aic-demo-saml
+          ping-aic-ese-workspace
+          reillyjump2
+          rnpatel-snowflake-non-prod
+          SIS_EDSLData
+          tableau-oauth-project
+          "
+
+          if [ -n "${{ secrets.REPO_NAME }}" ]; then
+            exclude_repos="${exclude_repos}
+          ${{ secrets.REPO_NAME }}"
+          fi
+
+          repo_list=$(gh repo list ${{ secrets.OWNER }} --limit 1000 --json name --jq '.[].name')
+
+          repo_list=$(echo "$repo_list" | sed 's/^[ \t]*//;s/[ \t]*$//')
+
+          # Apply keyword filtering
+          repo_list=$(printf "%s\n" $repo_list | grep -Ev "$keywords" | grep -v '^$')
+
+          # Exclude repos (exact match, skip comment lines)
+          clean_excludes=$(echo "$exclude_repos" | grep -v '^\s*#' | grep -v '^\s*$' | sed 's/^[ \t]*//')
+          for ex in $clean_excludes; do
+            repo_list=$(printf "%s\n" "$repo_list" | grep -Fxv "$ex")
+          done
+
+          repo_list=$(printf "%s\n" "$repo_list" | sort -f | uniq)
+
+          if [ -z "$repo_list" ]; then
+            echo "Error: Empty repo list after filtering"
+            exit 1
+          fi
+
+          echo "Final REPO LIST:"
+          printf "%s\n" "$repo_list"
+
+          # Convert repo list to JSON array and store in file
+          printf '%s\n' "$repo_list" | jq -R . | jq -s . > repo-list.json
+
+          echo "Generated JSON array:"
+          cat repo-list.json
+
+      - name: Compare with current list
+        run: |
+          SCAN_WORKFLOW=.github/workflows/security-scan-v4-0.yml
+
+          # Extract current options from security-scan-v4-0.yml (repo-name has hyphen)
+          yq eval -o=json '.on.workflow_dispatch.inputs["repo-name"].options' "$SCAN_WORKFLOW" > current-scan.json
+
+          new_sorted=$(jq -S '.' repo-list.json)
+          scan_sorted=$(jq -S '.' current-scan.json)
+
+          echo "Current security-scan-v4-0 repo list:"
+          cat current-scan.json
+
+          echo ""
+          echo "New repo list:"
+          cat repo-list.json
+
+          if [ "$scan_sorted" == "$new_sorted" ]; then
+            echo ""
+            echo "✓ List is already up to date. No update needed."
+            echo "SKIP_UPDATE=true" >> $GITHUB_ENV
+          else
+            echo ""
+            echo "✗ Lists differ. Update required."
+            echo "SKIP_UPDATE=false" >> $GITHUB_ENV
+
+            echo ""
+            echo "Differences:"
+            diff <(echo "$scan_sorted" | jq -r '.[]' | sort -f) <(echo "$new_sorted" | jq -r '.[]' | sort -f) || true
+          fi
+
+      - name: Update workflow file
+        if: env.SKIP_UPDATE != 'true'
+        run: |
+          SCAN_WORKFLOW=.github/workflows/security-scan-v4-0.yml
+
+          echo "Updating $SCAN_WORKFLOW ..."
+          yq eval '.on.workflow_dispatch.inputs["repo-name"].options = load("repo-list.json")' -i "$SCAN_WORKFLOW"
+
+          echo ""
+          echo "Updated repo-name options preview:"
+          yq eval '.on.workflow_dispatch.inputs["repo-name"].options' "$SCAN_WORKFLOW"
+
+      - name: Commit and push
+        if: env.SKIP_UPDATE != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .github/workflows/security-scan-v4-0.yml
+          git commit -m "Updated repository list in .github/workflows/security-scan-v4-0.yml"
+          git push
+
+      - name: Notify - No update needed
+        if: env.SKIP_UPDATE == 'true'
+        run: |
+          echo "========================================="
+          echo "✓ SUCCESS: Repository lists are up to date"
+          echo "========================================="
+          echo "No changes detected in repository lists."
+          echo "Workflow completed without making updates."
+          echo "========================================="
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "Workflow failed. Check logs for details."
